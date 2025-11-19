@@ -1,5 +1,5 @@
 [package]
-name = "quick-start-simple"
+name = "codec-comparison"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,5 +12,5 @@ rkyv = "0.8.12"
 criterion = "0.7.0"
 
 [[bench]]
-name = "encoding_size"
+name = "codec"
 harness = false
