@@ -73,6 +73,7 @@
             # pkgs.ripgrep
             pkgs.rust-analyzer
             pkgs.cargo-watch
+            pkgs.capnproto
           ];
         };
       }

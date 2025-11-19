@@ -32,6 +32,51 @@ pub struct Block {
     pub full_terms: Vec<FullTerm>,
 }
 
+// Cap'n Proto conversion helpers
+impl Block {
+    pub fn to_capnp(&self, builder: &mut capnp::message::Builder<capnp::message::HeapAllocator>) {
+        let mut block_builder = builder.init_root::<block_capnp::block::Builder>();
+        let mut terms_builder = block_builder
+            .reborrow()
+            .init_full_terms(self.full_terms.len() as u32);
+
+        for (i, term) in self.full_terms.iter().enumerate() {
+            let mut term_builder = terms_builder.reborrow().get(i as u32);
+            term_builder.set_doc_id(term.doc_id);
+
+            let mut mask_builder = term_builder.reborrow().init_field_mask();
+            mask_builder.set_high((term.field_mask >> 64) as u64);
+            mask_builder.set_low(term.field_mask as u64);
+
+            term_builder.set_frequency(term.frequency);
+        }
+    }
+
+    pub fn from_capnp(reader: block_capnp::block::Reader) -> capnp::Result<Self> {
+        let terms_reader = reader.get_full_terms()?;
+        let mut full_terms = Vec::with_capacity(terms_reader.len() as usize);
+
+        for term_reader in terms_reader.iter() {
+            let mask_reader = term_reader.get_field_mask()?;
+            let field_mask =
+                ((mask_reader.get_high() as u128) << 64) | (mask_reader.get_low() as u128);
+
+            full_terms.push(FullTerm {
+                doc_id: term_reader.get_doc_id(),
+                field_mask,
+                frequency: term_reader.get_frequency(),
+            });
+        }
+
+        Ok(Block { full_terms })
+    }
+}
+
+// Include the generated Cap'n Proto code
+pub mod block_capnp {
+    include!(concat!(env!("OUT_DIR"), "/block_capnp.rs"));
+}
+
 /// Generate test data with 1M entries across blocks of 100 entries each
 pub fn generate_test_data() -> Vec<Block> {
     const TOTAL_ENTRIES: usize = 1_000_000;

@@ -1,5 +1,7 @@
 use std::hint::black_box;
 
+use capnp::message::{Builder, HeapAllocator, Reader, ReaderOptions};
+use codec_comparison::block_capnp;
 use codec_comparison::{generate_test_data, ArchivedBlock, Block, FullTerm};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
@@ -49,6 +51,16 @@ fn measure_sizes() {
         postcard_size += bytes.len();
     }
     print_size_stats("postcard", postcard_size);
+
+    // Measure capnp size
+    let mut capnp_size = 0;
+    for block in &test_data {
+        let mut message = Builder::new_default();
+        block.to_capnp(&mut message);
+        let bytes = capnp::serialize::write_message_to_words(&message);
+        capnp_size += bytes.len() * 8; // words are 8 bytes each
+    }
+    print_size_stats("capnp", capnp_size);
 
     println!(); // Extra newline after all sizes
 }
@@ -314,11 +326,115 @@ fn benchmark_postcard(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_capnp(c: &mut Criterion) {
+    let test_data = generate_test_data();
+
+    let mut group = c.benchmark_group("capnp");
+
+    // Benchmark serialization speed
+    group.bench_function("serialize", |b| {
+        b.iter(|| {
+            for block in black_box(&test_data) {
+                let mut message = Builder::new_default();
+                block.to_capnp(&mut message);
+                let bytes = capnp::serialize::write_message_to_words(&message);
+                black_box(bytes);
+            }
+        });
+    });
+
+    // Pre-serialize data for deserialization benchmarks
+    let serialized_blocks: Vec<_> = test_data
+        .iter()
+        .map(|block| {
+            let mut message = Builder::new_default();
+            block.to_capnp(&mut message);
+            capnp::serialize::write_message_to_words(&message)
+        })
+        .collect();
+
+    // Benchmark full sequential read with full deserialization
+    group.bench_function("full_read", |b| {
+        b.iter(|| {
+            let mut total_frequency = 0u64;
+
+            for serialized_block in black_box(&serialized_blocks) {
+                // Full deserialization
+                let reader = capnp::serialize::read_message_from_flat_slice(
+                    &mut &serialized_block[..],
+                    ReaderOptions::new(),
+                )
+                .unwrap();
+                let block =
+                    Block::from_capnp(reader.get_root::<block_capnp::block::Reader>().unwrap())
+                        .unwrap();
+
+                // Iterate through all entries and read all fields
+                for term in &block.full_terms {
+                    let _doc_id = term.doc_id;
+                    let _field_mask = term.field_mask;
+                    total_frequency += term.frequency;
+                }
+            }
+
+            total_frequency
+        });
+    });
+
+    // Benchmark filtered reads at different hit rates
+    for hit_rate in [0.1, 0.5, 0.9] {
+        let query_mask = create_query_mask(hit_rate);
+
+        group.bench_with_input(
+            BenchmarkId::new("filtered_read", format!("{}%", (hit_rate * 100.0) as u32)),
+            &query_mask,
+            |b, &query_mask| {
+                b.iter(|| {
+                    let mut total_frequency = 0u64;
+                    let mut matched_count = 0usize;
+
+                    for serialized_block in black_box(&serialized_blocks) {
+                        // Zero-copy access to capnp data
+                        let reader = capnp::serialize::read_message_from_flat_slice(
+                            &mut &serialized_block[..],
+                            ReaderOptions::new(),
+                        )
+                        .unwrap();
+                        let block_reader = reader.get_root::<block_capnp::block::Reader>().unwrap();
+                        let terms_reader = block_reader.get_full_terms().unwrap();
+
+                        // Check each term's field_mask without full deserialization
+                        for term_reader in terms_reader.iter() {
+                            // Access field_mask without deserializing entire term (zero-copy)
+                            let mask_reader = term_reader.get_field_mask().unwrap();
+                            let field_mask = ((mask_reader.get_high() as u128) << 64)
+                                | (mask_reader.get_low() as u128);
+
+                            if field_mask & query_mask != 0 {
+                                // Only now read the other fields
+                                let _doc_id = term_reader.get_doc_id();
+                                let frequency = term_reader.get_frequency();
+                                total_frequency += frequency;
+                                matched_count += 1;
+                            }
+                        }
+                    }
+
+                    (total_frequency, matched_count)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn all_benchmarks(c: &mut Criterion) {
     measure_sizes();
     benchmark_rkyv(c);
     benchmark_bincode(c);
     benchmark_postcard(c);
+    benchmark_capnp(c);
 }
 
 criterion_group!(benches, all_benchmarks);
