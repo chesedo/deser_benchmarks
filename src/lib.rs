@@ -6,6 +6,8 @@
     Clone,
     bincode::Encode,
     bincode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct FullTerm {
@@ -22,6 +24,8 @@ pub struct FullTerm {
     Clone,
     bincode::Encode,
     bincode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Block {

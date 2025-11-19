@@ -42,6 +42,14 @@ fn measure_sizes() {
     }
     print_size_stats("bincode", bincode_size);
 
+    // Measure postcard size
+    let mut postcard_size = 0;
+    for block in &test_data {
+        let bytes = postcard::to_stdvec(block).unwrap();
+        postcard_size += bytes.len();
+    }
+    print_size_stats("postcard", postcard_size);
+
     println!(); // Extra newline after all sizes
 }
 
@@ -228,10 +236,89 @@ fn benchmark_bincode(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_postcard(c: &mut Criterion) {
+    let test_data = generate_test_data();
+
+    let mut group = c.benchmark_group("postcard");
+
+    // Benchmark serialization speed
+    group.bench_function("serialize", |b| {
+        b.iter(|| {
+            for block in black_box(&test_data) {
+                let bytes = postcard::to_stdvec(block).unwrap();
+                black_box(bytes);
+            }
+        });
+    });
+
+    // Pre-serialize data for deserialization benchmarks
+    let serialized_blocks: Vec<_> = test_data
+        .iter()
+        .map(|block| postcard::to_stdvec(block).unwrap())
+        .collect();
+
+    // Benchmark full sequential read with full deserialization
+    group.bench_function("full_read", |b| {
+        b.iter(|| {
+            let mut total_frequency = 0u64;
+
+            for serialized_block in black_box(&serialized_blocks) {
+                // Full deserialization
+                let block: Block = postcard::from_bytes(serialized_block).unwrap();
+
+                // Iterate through all entries and read all fields
+                for term in &block.full_terms {
+                    let _doc_id = term.doc_id;
+                    let _field_mask = term.field_mask;
+                    total_frequency += term.frequency;
+                }
+            }
+
+            total_frequency
+        });
+    });
+
+    // Benchmark filtered reads at different hit rates
+    for hit_rate in [0.1, 0.5, 0.9] {
+        let query_mask = create_query_mask(hit_rate);
+
+        group.bench_with_input(
+            BenchmarkId::new("filtered_read", format!("{}%", (hit_rate * 100.0) as u32)),
+            &query_mask,
+            |b, &query_mask| {
+                b.iter(|| {
+                    let mut total_frequency = 0u64;
+                    let mut matched_count = 0usize;
+
+                    for serialized_block in black_box(&serialized_blocks) {
+                        // postcard requires full deserialization
+                        let block: Block = postcard::from_bytes(serialized_block).unwrap();
+
+                        // Check each term's field_mask and only process if it matches
+                        for term in &block.full_terms {
+                            if term.field_mask & query_mask != 0 {
+                                let _doc_id = term.doc_id;
+                                let _field_mask = term.field_mask;
+                                total_frequency += term.frequency;
+                                matched_count += 1;
+                            }
+                        }
+                    }
+
+                    (total_frequency, matched_count)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn all_benchmarks(c: &mut Criterion) {
     measure_sizes();
     benchmark_rkyv(c);
     benchmark_bincode(c);
+    benchmark_postcard(c);
 }
 
 criterion_group!(benches, all_benchmarks);
