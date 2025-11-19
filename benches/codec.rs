@@ -2,17 +2,36 @@ use std::hint::black_box;
 
 use codec_comparison::{generate_test_data, ArchivedBlock, Block, FullTerm};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rkyv::{deserialize, rancor::Error};
+
+fn print_size_stats(name: &str, total_size: usize) {
+    println!(
+        "\n{} total size: {} bytes ({:.2} MB)",
+        name,
+        total_size,
+        total_size as f64 / 1_048_576.0
+    );
+    println!(
+        "  Average per entry: {:.2} bytes",
+        total_size as f64 / 1_000_000.0
+    );
+    println!(
+        "  Average per block: {:.2} bytes",
+        total_size as f64 / 10_000.0
+    );
+}
 
 fn measure_sizes() {
     let test_data = generate_test_data();
 
+    println!("\n=== Encoding Sizes ===");
+
     // Measure rkyv size
     let mut rkyv_size = 0;
     for block in &test_data {
-        let bytes = rkyv::to_bytes::<Error>(block).unwrap();
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(block).unwrap();
         rkyv_size += bytes.len();
     }
+    print_size_stats("rkyv", rkyv_size);
 
     // Measure bincode size
     let bincode_config = bincode::config::standard();
@@ -21,35 +40,9 @@ fn measure_sizes() {
         let bytes = bincode::encode_to_vec(block, bincode_config).unwrap();
         bincode_size += bytes.len();
     }
+    print_size_stats("bincode", bincode_size);
 
-    println!("\n=== Encoding Sizes ===");
-    println!(
-        "rkyv total size: {} bytes ({:.2} MB)",
-        rkyv_size,
-        rkyv_size as f64 / 1_048_576.0
-    );
-    println!(
-        "  Average per entry: {:.2} bytes",
-        rkyv_size as f64 / 1_000_000.0
-    );
-    println!(
-        "  Average per block: {:.2} bytes",
-        rkyv_size as f64 / 10_000.0
-    );
-
-    println!(
-        "\nbincode total size: {} bytes ({:.2} MB)",
-        bincode_size,
-        bincode_size as f64 / 1_048_576.0
-    );
-    println!(
-        "  Average per entry: {:.2} bytes",
-        bincode_size as f64 / 1_000_000.0
-    );
-    println!(
-        "  Average per block: {:.2} bytes\n",
-        bincode_size as f64 / 10_000.0
-    );
+    println!(); // Extra newline after all sizes
 }
 
 // Helper function to create a query mask that will match ~target_rate of entries
@@ -74,7 +67,7 @@ fn benchmark_rkyv(c: &mut Criterion) {
     group.bench_function("serialize", |b| {
         b.iter(|| {
             for block in black_box(&test_data) {
-                let bytes = rkyv::to_bytes::<Error>(block).unwrap();
+                let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(block).unwrap();
                 black_box(bytes);
             }
         });
@@ -83,7 +76,7 @@ fn benchmark_rkyv(c: &mut Criterion) {
     // Pre-serialize data for deserialization benchmarks
     let serialized_blocks: Vec<_> = test_data
         .iter()
-        .map(|block| rkyv::to_bytes::<Error>(block).unwrap())
+        .map(|block| rkyv::to_bytes::<rkyv::rancor::Error>(block).unwrap())
         .collect();
 
     // Benchmark full sequential read with full deserialization
@@ -93,7 +86,8 @@ fn benchmark_rkyv(c: &mut Criterion) {
 
             for serialized_block in black_box(&serialized_blocks) {
                 // Full deserialization
-                let block = rkyv::from_bytes::<Block, Error>(serialized_block).unwrap();
+                let block =
+                    rkyv::from_bytes::<Block, rkyv::rancor::Error>(serialized_block).unwrap();
 
                 // Iterate through all entries and read all fields
                 for term in &block.full_terms {
@@ -122,7 +116,8 @@ fn benchmark_rkyv(c: &mut Criterion) {
                     for serialized_block in black_box(&serialized_blocks) {
                         // Zero-copy access to archived data
                         let archived =
-                            rkyv::access::<ArchivedBlock, Error>(serialized_block).unwrap();
+                            rkyv::access::<ArchivedBlock, rkyv::rancor::Error>(serialized_block)
+                                .unwrap();
 
                         // Check each term's field_mask and only fully deserialize if it matches
                         for archived_term in archived.full_terms.iter() {
@@ -131,7 +126,10 @@ fn benchmark_rkyv(c: &mut Criterion) {
 
                             if field_mask & query_mask != 0 {
                                 // Only now do we "deserialize" by reading the other fields
-                                let term = deserialize::<FullTerm, Error>(archived_term).unwrap();
+                                let term = rkyv::deserialize::<FullTerm, rkyv::rancor::Error>(
+                                    archived_term,
+                                )
+                                .unwrap();
                                 let _doc_id = term.doc_id;
                                 let _field_mask = term.field_mask;
                                 total_frequency += term.frequency;

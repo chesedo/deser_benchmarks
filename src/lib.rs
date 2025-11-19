@@ -1,6 +1,12 @@
-use rkyv::{Archive, Deserialize, Serialize};
-
-#[derive(Archive, Deserialize, Serialize, Debug, Clone, bincode::Encode, bincode::Decode)]
+#[derive(
+    rkyv::Archive,
+    rkyv::Deserialize,
+    rkyv::Serialize,
+    Debug,
+    Clone,
+    bincode::Encode,
+    bincode::Decode,
+)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct FullTerm {
     pub doc_id: u64,
@@ -8,7 +14,15 @@ pub struct FullTerm {
     pub frequency: u64,
 }
 
-#[derive(Archive, Deserialize, Serialize, Debug, Clone, bincode::Encode, bincode::Decode)]
+#[derive(
+    rkyv::Archive,
+    rkyv::Deserialize,
+    rkyv::Serialize,
+    Debug,
+    Clone,
+    bincode::Encode,
+    bincode::Decode,
+)]
 #[rkyv(compare(PartialEq), derive(Debug))]
 pub struct Block {
     pub full_terms: Vec<FullTerm>,
