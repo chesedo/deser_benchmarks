@@ -1,3 +1,5 @@
+pub mod manual_zerocopy;
+
 #[derive(
     rkyv::Archive,
     rkyv::Deserialize,

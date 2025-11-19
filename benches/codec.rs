@@ -1,7 +1,9 @@
 use std::hint::black_box;
 
 use capnp::message::{Builder, ReaderOptions};
-use codec_comparison::{block_capnp, generate_test_data, ArchivedBlock, Block, FullTerm};
+use codec_comparison::{
+    block_capnp, generate_test_data, manual_zerocopy, ArchivedBlock, Block, FullTerm,
+};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 fn print_size_stats(name: &str, total_size: usize) {
@@ -60,6 +62,14 @@ fn measure_sizes() {
         capnp_size += bytes.len() * 8; // words are 8 bytes each
     }
     print_size_stats("capnp", capnp_size);
+
+    // Measure manual zero-copy size
+    let mut manual_size = 0;
+    for block in &test_data {
+        let bytes = manual_zerocopy::serialize(block);
+        manual_size += bytes.len();
+    }
+    print_size_stats("manual_zerocopy", manual_size);
 
     println!(); // Extra newline after all sizes
 }
@@ -121,6 +131,15 @@ fn benchmark_serialize(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("manual_zerocopy", |b| {
+        b.iter(|| {
+            for block in black_box(&test_data) {
+                let bytes = manual_zerocopy::serialize(block);
+                black_box(bytes);
+            }
+        });
+    });
+
     group.finish();
 }
 
@@ -151,6 +170,11 @@ fn benchmark_full_read(c: &mut Criterion) {
             block.to_capnp(&mut message);
             capnp::serialize::write_message_to_words(&message)
         })
+        .collect();
+
+    let manual_blocks: Vec<_> = test_data
+        .iter()
+        .map(|block| manual_zerocopy::serialize(block))
         .collect();
 
     let mut group = c.benchmark_group("full_read");
@@ -236,6 +260,24 @@ fn benchmark_full_read(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("manual_zerocopy", |b| {
+        b.iter(|| {
+            let mut total_frequency = 0u64;
+
+            for serialized_block in black_box(&manual_blocks) {
+                let block = manual_zerocopy::deserialize(serialized_block).unwrap();
+
+                for term in &block.full_terms {
+                    let _doc_id = term.doc_id;
+                    let _field_mask = term.field_mask;
+                    total_frequency += term.frequency;
+                }
+            }
+
+            total_frequency
+        });
+    });
+
     group.finish();
 }
 
@@ -266,6 +308,11 @@ fn benchmark_filtered_read(c: &mut Criterion) {
             block.to_capnp(&mut message);
             capnp::serialize::write_message_to_words(&message)
         })
+        .collect();
+
+    let manual_blocks: Vec<_> = test_data
+        .iter()
+        .map(|block| manual_zerocopy::serialize(block))
         .collect();
 
     for hit_rate in [0.1, 0.5, 0.9] {
@@ -370,6 +417,31 @@ fn benchmark_filtered_read(c: &mut Criterion) {
                             let _doc_id = term_reader.get_doc_id();
                             let frequency = term_reader.get_frequency();
                             total_frequency += frequency;
+                            matched_count += 1;
+                        }
+                    }
+                }
+
+                (total_frequency, matched_count)
+            });
+        });
+
+        group.bench_function("manual_zerocopy", |b| {
+            b.iter(|| {
+                let mut total_frequency = 0u64;
+                let mut matched_count = 0usize;
+
+                for serialized_block in black_box(&manual_blocks) {
+                    let reader = manual_zerocopy::BlockReader::new(serialized_block).unwrap();
+
+                    for term_reader in reader.iter() {
+                        let field_mask = term_reader.field_mask();
+
+                        if field_mask & query_mask != 0 {
+                            let term = term_reader.deserialize();
+                            let _doc_id = term.doc_id;
+                            let _field_mask = term.field_mask;
+                            total_frequency += term.frequency;
                             matched_count += 1;
                         }
                     }
