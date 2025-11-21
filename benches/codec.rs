@@ -2,9 +2,10 @@ use std::hint::black_box;
 
 use capnp::message::{Builder, ReaderOptions};
 use codec_comparison::{
-    block_capnp, generate_test_data, manual_zerocopy, ArchivedBlock, Block, FullTerm,
+    block_capnp, generate_test_data, manual_zerocopy, manual_zerocopy_v2, ArchivedBlock, Block,
+    FullTerm,
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn print_size_stats(name: &str, total_size: usize) {
     println!(
@@ -70,6 +71,14 @@ fn measure_sizes() {
         manual_size += bytes.len();
     }
     print_size_stats("manual_zerocopy", manual_size);
+
+    // Measure manual zero-copy v2 size
+    let mut manual_v2_size = 0;
+    for block in &test_data {
+        let bytes = manual_zerocopy_v2::serialize(block);
+        manual_v2_size += bytes.len();
+    }
+    print_size_stats("manual_zerocopy_v2", manual_v2_size);
 
     println!(); // Extra newline after all sizes
 }
@@ -140,6 +149,15 @@ fn benchmark_serialize(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("manual_zerocopy_v2", |b| {
+        b.iter(|| {
+            for block in black_box(&test_data) {
+                let bytes = manual_zerocopy_v2::serialize(block);
+                black_box(bytes);
+            }
+        });
+    });
+
     group.finish();
 }
 
@@ -175,6 +193,11 @@ fn benchmark_full_read(c: &mut Criterion) {
     let manual_blocks: Vec<_> = test_data
         .iter()
         .map(|block| manual_zerocopy::serialize(block))
+        .collect();
+
+    let manual_v2_blocks: Vec<_> = test_data
+        .iter()
+        .map(|block| manual_zerocopy_v2::serialize(block))
         .collect();
 
     let mut group = c.benchmark_group("full_read");
@@ -278,6 +301,24 @@ fn benchmark_full_read(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("manual_zerocopy_v2", |b| {
+        b.iter(|| {
+            let mut total_frequency = 0u64;
+
+            for serialized_block in black_box(&manual_v2_blocks) {
+                let block = manual_zerocopy_v2::deserialize(serialized_block).unwrap();
+
+                for term in &block.full_terms {
+                    let _doc_id = term.doc_id;
+                    let _field_mask = term.field_mask;
+                    total_frequency += term.frequency;
+                }
+            }
+
+            total_frequency
+        });
+    });
+
     group.finish();
 }
 
@@ -313,6 +354,11 @@ fn benchmark_filtered_read(c: &mut Criterion) {
     let manual_blocks: Vec<_> = test_data
         .iter()
         .map(|block| manual_zerocopy::serialize(block))
+        .collect();
+
+    let manual_v2_blocks: Vec<_> = test_data
+        .iter()
+        .map(|block| manual_zerocopy_v2::serialize(block))
         .collect();
 
     for hit_rate in [0.1, 0.5, 0.9] {
@@ -438,10 +484,33 @@ fn benchmark_filtered_read(c: &mut Criterion) {
                         let field_mask = term_reader.field_mask();
 
                         if field_mask & query_mask != 0 {
-                            let term = term_reader.deserialize();
-                            let _doc_id = term.doc_id;
-                            let _field_mask = term.field_mask;
-                            total_frequency += term.frequency;
+                            let _doc_id = term_reader.doc_id();
+                            let frequency = term_reader.frequency();
+                            total_frequency += frequency;
+                            matched_count += 1;
+                        }
+                    }
+                }
+
+                (total_frequency, matched_count)
+            });
+        });
+
+        group.bench_function("manual_zerocopy_v2", |b| {
+            b.iter(|| {
+                let mut total_frequency = 0u64;
+                let mut matched_count = 0usize;
+
+                for serialized_block in black_box(&manual_v2_blocks) {
+                    let reader = manual_zerocopy_v2::BlockReader::new(serialized_block).unwrap();
+
+                    for archived_term in reader.iter() {
+                        let field_mask = archived_term.field_mask();
+
+                        if field_mask & query_mask != 0 {
+                            let _doc_id = archived_term.doc_id();
+                            let frequency = archived_term.frequency();
+                            total_frequency += frequency;
                             matched_count += 1;
                         }
                     }

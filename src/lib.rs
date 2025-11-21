@@ -1,4 +1,5 @@
 pub mod manual_zerocopy;
+pub mod manual_zerocopy_v2;
 
 #[derive(
     rkyv::Archive,
