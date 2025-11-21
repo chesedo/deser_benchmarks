@@ -52,13 +52,18 @@ pub fn deserialize(bytes: &[u8]) -> Result<Block, &'static str> {
     let mut offset = 4;
 
     for _ in 0..num_terms {
-        let doc_id = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        // SAFETY: We validated the buffer size above, so we know all these slices are valid
+        let doc_id =
+            unsafe { u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap_unchecked()) };
         offset += 8;
 
-        let field_mask = u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap());
+        let field_mask = unsafe {
+            u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap_unchecked())
+        };
         offset += 16;
 
-        let frequency = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        let frequency =
+            unsafe { u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap_unchecked()) };
         offset += 8;
 
         full_terms.push(FullTerm {
@@ -116,6 +121,7 @@ pub struct TermIterator<'a> {
 impl<'a> Iterator for TermIterator<'a> {
     type Item = TermReader<'a>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining == 0 {
             return None;
@@ -147,29 +153,42 @@ pub struct TermReader<'a> {
 
 impl<'a> TermReader<'a> {
     /// Read doc_id without deserializing the entire term
-    #[inline]
+    #[inline(always)]
     pub fn doc_id(&self) -> u64 {
-        u64::from_le_bytes(self.bytes[self.offset..self.offset + 8].try_into().unwrap())
+        // SAFETY: Buffer size was validated in BlockReader::new()
+        unsafe {
+            u64::from_le_bytes(
+                self.bytes[self.offset..self.offset + 8]
+                    .try_into()
+                    .unwrap_unchecked(),
+            )
+        }
     }
 
     /// Read field_mask without deserializing the entire term
-    #[inline]
+    #[inline(always)]
     pub fn field_mask(&self) -> u128 {
-        u128::from_le_bytes(
-            self.bytes[self.offset + 8..self.offset + 24]
-                .try_into()
-                .unwrap(),
-        )
+        // SAFETY: Buffer size was validated in BlockReader::new()
+        unsafe {
+            u128::from_le_bytes(
+                self.bytes[self.offset + 8..self.offset + 24]
+                    .try_into()
+                    .unwrap_unchecked(),
+            )
+        }
     }
 
     /// Read frequency without deserializing the entire term
-    #[inline]
+    #[inline(always)]
     pub fn frequency(&self) -> u64 {
-        u64::from_le_bytes(
-            self.bytes[self.offset + 24..self.offset + 32]
-                .try_into()
-                .unwrap(),
-        )
+        // SAFETY: Buffer size was validated in BlockReader::new()
+        unsafe {
+            u64::from_le_bytes(
+                self.bytes[self.offset + 24..self.offset + 32]
+                    .try_into()
+                    .unwrap_unchecked(),
+            )
+        }
     }
 
     /// Fully deserialize this term
